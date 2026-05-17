@@ -3,17 +3,16 @@ import requests
 import schedule
 import time
 from datetime import datetime
-import google.generativeai as genai
+from google import genai
 
 # ─── إعدادات ───────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("8905450316:AAHJFhI9BuZXhT_-uBS4Do2UTwnnZDsLy8g")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-GEMINI_API_KEY   = os.environ.get("AIzaSyDVqczwdGH3L69PMnfytEtqnAnD_tmw2IM")
-NEWSAPI_KEY      = os.environ.get("97ce1c9acdca450d99981bba0ef96d17")
+GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY")
+NEWSAPI_KEY      = os.environ.get("NEWSAPI_KEY")
 
 # ─── إعداد Gemini ───────────────────────────────────────
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+client_gemini = genai.Client(api_key=GEMINI_API_KEY)
 
 # ─── البرومبت الاحترافي الكامل ─────────────────────────
 SYSTEM_PROMPT = open("system_prompt.txt", encoding="utf-8").read()
@@ -74,7 +73,10 @@ def get_fx_rates():
 # ─── التحليل عبر Gemini ─────────────────────────────────
 def analyze_with_gemini(user_message):
     full_prompt = SYSTEM_PROMPT + "\n\n" + user_message
-    response = model.generate_content(full_prompt)
+    response = client_gemini.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=full_prompt
+    )
     return response.text
 
 # ─── إرسال رسالة على Telegram ──────────────────────────
