@@ -3,175 +3,151 @@ import requests
 import schedule
 import time
 from datetime import datetime
-import google.generativeai as genai
 
 # ─── إعدادات ───────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY")
-NEWSAPI_KEY      = os.environ.get("NEWSAPI_KEY")
+TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+NEWSAPI_KEY       = os.environ.get("NEWSAPI_KEY")
 
-# ─── إعداد Gemini ───────────────────────────────────────
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
-
-# ─── البرومبت الاحترافي الكامل ─────────────────────────
+# ─── البرومبت الاحترافي ─────────────────────────────────
 SYSTEM_PROMPT = open("system_prompt.txt", encoding="utf-8").read()
 
-# ─── جلب الأخبار الاقتصادية ────────────────────────────
-def get_breaking_news():
+# ─── التحليل عبر OpenRouter ────────────────────────────
+def analyze(user_message):
+    res = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "mistralai/mistral-7b-instruct:free",
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message}
+            ]
+        },
+        timeout=60
+    )
+    return res.json()["choices"][0]["message"]["content"]
+
+# ─── جلب الأخبار ────────────────────────────────────────
+def get_news():
     try:
         url = (
             f"https://newsapi.org/v2/everything"
-            f"?q=Federal+Reserve+OR+ECB+OR+inflation+OR+interest+rate+OR+forex"
-            f"&language=en"
-            f"&sortBy=publishedAt"
-            f"&pageSize=5"
+            f"?q=Federal+Reserve+OR+ECB+OR+inflation+OR+forex"
+            f"&language=en&sortBy=publishedAt&pageSize=5"
             f"&apiKey={NEWSAPI_KEY}"
         )
-        res = requests.get(url, timeout=10).json()
-        articles = res.get("articles", [])
+        articles = requests.get(url, timeout=10).json().get("articles", [])
         if not articles:
-            return "لا توجد أخبار جديدة حالياً."
-        news_text = ""
-        for i, a in enumerate(articles, 1):
-            news_text += f"{i}. {a['title']}\n   المصدر: {a['source']['name']}\n\n"
-        return news_text
+            return "لا توجد أخبار حالياً."
+        return "\n".join([f"{i+1}. {a['title']} — {a['source']['name']}"
+                          for i, a in enumerate(articles)])
     except Exception as e:
-        return f"تعذر جلب الأخبار: {e}"
+        return f"خطأ في الأخبار: {e}"
 
-# ─── جلب بيانات الفائدة الأمريكية ─────────────────────
-def get_fedwatch():
+# ─── جلب الفائدة الأمريكية ──────────────────────────────
+def get_fed():
     try:
-        url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS"
-        res = requests.get(url, timeout=10)
-        lines = res.text.strip().split("\n")
+        lines = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS",
+            timeout=10
+        ).text.strip().split("\n")
         last = lines[-1].split(",")
-        return f"آخر قراءة لمعدل الفائدة الفيدرالي: {last[1]}% (تاريخ: {last[0]})"
+        return f"معدل الفائدة الفيدرالي: {last[1]}% ({last[0]})"
     except Exception as e:
-        return f"تعذر جلب بيانات الفائدة: {e}"
+        return f"خطأ في الفائدة: {e}"
 
-# ─── جلب أسعار العملات ─────────────────────────────────
-def get_fx_rates():
+# ─── جلب أسعار العملات ──────────────────────────────────
+def get_fx():
     try:
-        url = "https://open.er-api.com/v6/latest/USD"
-        res = requests.get(url, timeout=10).json()
-        rates = res.get("rates", {})
-        pairs = {
-            "EUR/USD": round(1 / rates.get("EUR", 1), 5),
-            "GBP/USD": round(1 / rates.get("GBP", 1), 5),
-            "USD/JPY": round(rates.get("JPY", 0), 3),
-            "USD/CAD": round(rates.get("CAD", 0), 5),
-            "AUD/USD": round(1 / rates.get("AUD", 1), 5),
-        }
-        text = ""
-        for pair, rate in pairs.items():
-            text += f"• {pair}: {rate}\n"
-        return text
+        rates = requests.get(
+            "https://open.er-api.com/v6/latest/USD", timeout=10
+        ).json().get("rates", {})
+        return (
+            f"EUR/USD: {round(1/rates.get('EUR',1),5)}\n"
+            f"GBP/USD: {round(1/rates.get('GBP',1),5)}\n"
+            f"USD/JPY: {round(rates.get('JPY',0),3)}\n"
+            f"USD/CAD: {round(rates.get('CAD',0),5)}\n"
+            f"AUD/USD: {round(1/rates.get('AUD',1),5)}"
+        )
     except Exception as e:
-        return f"تعذر جلب أسعار العملات: {e}"
+        return f"خطأ في العملات: {e}"
 
-# ─── التحليل عبر Gemini ─────────────────────────────────
-def analyze_with_gemini(user_message):
-    full_prompt = SYSTEM_PROMPT + "\n\n" + user_message
-    response = model.generate_content(full_prompt)
-    return response.text
-
-# ─── إرسال رسالة على Telegram ──────────────────────────
+# ─── إرسال Telegram ─────────────────────────────────────
 def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        max_len = 4000
-        parts = [message[i:i+max_len] for i in range(0, len(message), max_len)]
-        for part in parts:
+        for part in [message[i:i+4000] for i in range(0, len(message), 4000)]:
             requests.post(url, json={
                 "chat_id": TELEGRAM_CHAT_ID,
                 "text": part,
                 "parse_mode": "Markdown"
             }, timeout=15)
-        print(f"✅ تم الإرسال — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        print(f"✅ أرسل — {datetime.now().strftime('%H:%M')}")
     except Exception as e:
-        print(f"❌ خطأ في الإرسال: {e}")
+        print(f"❌ خطأ Telegram: {e}")
 
-# ─── التقرير الأسبوعي (كل أحد 6 مساءً) ───────────────
+# ─── التقرير الأسبوعي ───────────────────────────────────
 def weekly_analysis():
-    print("🔄 جاري إعداد التقرير الأسبوعي...")
-    news = get_breaking_news()
-    fed  = get_fedwatch()
-    fx   = get_fx_rates()
-    user_message = f"""
-أعد التقرير الأسبوعي الكامل الآن.
+    print("🔄 التقرير الأسبوعي...")
+    msg = f"""
+أعد التقرير الأسبوعي الكامل.
 
-البيانات الحالية:
+الأخبار:
+{get_news()}
 
-📰 آخر الأخبار الاقتصادية:
-{news}
+الفائدة الأمريكية:
+{get_fed()}
 
-🏦 بيانات الفائدة الأمريكية:
-{fed}
+أسعار العملات:
+{get_fx()}
 
-💱 أسعار العملات الحالية:
-{fx}
-
-بناءً على هذه البيانات، قدم:
-1. مراجعة الأسبوع المنتهي
-2. أجندة الأسبوع القادم
-3. خارطة السيناريوهات
-4. توصية الأسبوع
+قدم: مراجعة الأسبوع، أجندة الأسبوع القادم، السيناريوهات، التوصية.
 """
     try:
-        analysis = analyze_with_gemini(user_message)
-        header = f"📊 *التقرير الأسبوعي — {datetime.now().strftime('%Y/%m/%d')}*\n\n"
-        send_telegram(header + analysis)
+        send_telegram(f"📊 *التقرير الأسبوعي — {datetime.now().strftime('%Y/%m/%d')}*\n\n" + analyze(msg))
     except Exception as e:
-        send_telegram(f"❌ خطأ في التحليل الأسبوعي: {e}")
+        send_telegram(f"❌ خطأ: {e}")
 
-# ─── مراقبة الأخبار العاجلة (كل ساعة) ────────────────
-def check_breaking_news():
-    print("🔍 فحص الأخبار العاجلة...")
-    news = get_breaking_news()
-    keywords = [
-        "emergency", "rate hike", "rate cut", "crisis",
-        "recession", "war", "sanctions", "collapse",
-        "surprise", "unexpected", "shock"
-    ]
-    is_urgent = any(kw in news.lower() for kw in keywords)
-    if not is_urgent:
-        print("لا توجد أخبار عاجلة.")
+# ─── فحص الأخبار العاجلة ────────────────────────────────
+def check_news():
+    print("🔍 فحص الأخبار...")
+    news = get_news()
+    keywords = ["rate hike","rate cut","crisis","recession","war","sanctions","collapse","surprise","shock"]
+    if not any(k in news.lower() for k in keywords):
+        print("لا يوجد شيء عاجل.")
         return
-    print("⚡ خبر عاجل — جاري التحليل...")
-    fed = get_fedwatch()
-    fx  = get_fx_rates()
-    user_message = f"""
-خبر عاجل يستدعي تحليلاً فورياً.
+    print("⚡ خبر عاجل!")
+    msg = f"""
+خبر عاجل — حلله فوراً.
 
-📰 الأخبار:
+الأخبار:
 {news}
 
-💱 أسعار العملات الحالية:
-{fx}
+العملات:
+{get_fx()}
 
-🏦 الفائدة الأمريكية:
-{fed}
-
-قدم تحليل الأخبار العاجلة كاملاً وفق القسم 8 من إطار عملك.
+الفائدة:
+{get_fed()}
 """
     try:
-        analysis = analyze_with_gemini(user_message)
-        header = f"⚡ *تنبيه عاجل — {datetime.now().strftime('%Y/%m/%d %H:%M')}*\n\n"
-        send_telegram(header + analysis)
+        send_telegram(f"⚡ *تنبيه عاجل — {datetime.now().strftime('%H:%M')}*\n\n" + analyze(msg))
     except Exception as e:
         print(f"❌ خطأ: {e}")
 
 # ─── الجدولة ────────────────────────────────────────────
 schedule.every().sunday.at("18:00").do(weekly_analysis)
-schedule.every(1).hours.do(check_breaking_news)
+schedule.every(1).hours.do(check_news)
 
-# ─── تشغيل أولي ────────────────────────────────────────
+# ─── بدء التشغيل ────────────────────────────────────────
 print("🚀 النظام يعمل...")
-send_telegram("✅ *نظام التحليل الأساسي بدأ العمل*\nد. كمال منصور جاهز للتحليل 🎓")
+send_telegram("✅ *نظام التحليل الأساسي يعمل*\nد. كمال منصور جاهز 🎓")
 
-# ─── الحلقة الرئيسية ────────────────────────────────────
 while True:
     schedule.run_pending()
     time.sleep(60)
+    
