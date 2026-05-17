@@ -3,7 +3,7 @@ import requests
 import schedule
 import time
 from datetime import datetime
-from google import genai
+import google.generativeai as genai
 
 # ─── إعدادات ───────────────────────────────────────────
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN")
@@ -12,7 +12,8 @@ GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY")
 NEWSAPI_KEY      = os.environ.get("NEWSAPI_KEY")
 
 # ─── إعداد Gemini ───────────────────────────────────────
-client_gemini = genai.Client(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 # ─── البرومبت الاحترافي الكامل ─────────────────────────
 SYSTEM_PROMPT = open("system_prompt.txt", encoding="utf-8").read()
@@ -73,10 +74,7 @@ def get_fx_rates():
 # ─── التحليل عبر Gemini ─────────────────────────────────
 def analyze_with_gemini(user_message):
     full_prompt = SYSTEM_PROMPT + "\n\n" + user_message
-    response = client_gemini.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=full_prompt
-    )
+    response = model.generate_content(full_prompt)
     return response.text
 
 # ─── إرسال رسالة على Telegram ──────────────────────────
@@ -101,7 +99,6 @@ def weekly_analysis():
     news = get_breaking_news()
     fed  = get_fedwatch()
     fx   = get_fx_rates()
-
     user_message = f"""
 أعد التقرير الأسبوعي الكامل الآن.
 
@@ -133,23 +130,18 @@ def weekly_analysis():
 def check_breaking_news():
     print("🔍 فحص الأخبار العاجلة...")
     news = get_breaking_news()
-
     keywords = [
         "emergency", "rate hike", "rate cut", "crisis",
         "recession", "war", "sanctions", "collapse",
         "surprise", "unexpected", "shock"
     ]
-
     is_urgent = any(kw in news.lower() for kw in keywords)
-
     if not is_urgent:
         print("لا توجد أخبار عاجلة.")
         return
-
     print("⚡ خبر عاجل — جاري التحليل...")
     fed = get_fedwatch()
     fx  = get_fx_rates()
-
     user_message = f"""
 خبر عاجل يستدعي تحليلاً فورياً.
 
@@ -169,7 +161,7 @@ def check_breaking_news():
         header = f"⚡ *تنبيه عاجل — {datetime.now().strftime('%Y/%m/%d %H:%M')}*\n\n"
         send_telegram(header + analysis)
     except Exception as e:
-        print(f"❌ خطأ في تحليل الأخبار العاجلة: {e}")
+        print(f"❌ خطأ: {e}")
 
 # ─── الجدولة ────────────────────────────────────────────
 schedule.every().sunday.at("18:00").do(weekly_analysis)
