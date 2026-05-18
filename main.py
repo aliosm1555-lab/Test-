@@ -6,53 +6,44 @@ import threading
 from datetime import datetime
 
 # ─── إعدادات ───────────────────────────────────────────
-TELEGRAM_TOKEN     = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-NEWSAPI_KEY        = os.environ.get("NEWSAPI_KEY")
+TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+GROQ_API_KEY    = os.environ.get("GROQ_API_KEY")
+NEWSAPI_KEY     = os.environ.get("NEWSAPI_KEY")
 
 # ─── البرومبت ───────────────────────────────────────────
 SYSTEM_PROMPT = open("system_prompt.txt", encoding="utf-8").read()
 
-# ─── التحليل عبر OpenRouter ────────────────────────────
+# ─── التحليل عبر Groq ───────────────────────────────────
 def analyze(user_message):
     try:
         res = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
+            "https://api.groq.com/openai/v1/chat/completions",
             headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://fundamental-bot.railway.app",
-                "X-Title": "Fundamental Analysis Bot"
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
             },
             json={
-                "model": "mistralai/mistral-7b-instruct:free",
+                "model": "llama3-8b-8192",
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_message}
                 ],
-                "max_tokens": 2000
+                "max_tokens": 2048,
+                "temperature": 0.7
             },
-            timeout=90
+            timeout=60
         )
         data = res.json()
+        print("Groq response status:", res.status_code)
 
-        # طباعة الرد الكامل للتشخيص
-        print("OpenRouter response:", data)
-
-        # التحقق من الأخطاء
-        if "error" in data:
-            return f"خطأ من OpenRouter: {data['error'].get('message', str(data['error']))}"
-
-        if "choices" not in data or not data["choices"]:
-            return f"رد غير متوقع: {str(data)[:500]}"
+        if res.status_code != 200:
+            return f"خطأ من Groq ({res.status_code}): {data.get('error', {}).get('message', str(data))}"
 
         return data["choices"][0]["message"]["content"]
 
-    except requests.exceptions.Timeout:
-        return "انتهت مهلة الاتصال — حاول مجدداً"
     except Exception as e:
-        return f"خطأ غير متوقع: {str(e)}"
+        return f"خطأ: {str(e)}"
 
 # ─── جلب البيانات ───────────────────────────────────────
 def get_news():
@@ -69,7 +60,7 @@ def get_news():
         return "\n".join([f"{i+1}. {a['title']} — {a['source']['name']}"
                           for i, a in enumerate(articles)])
     except Exception as e:
-        return f"خطأ: {e}"
+        return f"خطأ الأخبار: {e}"
 
 def get_fed():
     try:
@@ -80,7 +71,7 @@ def get_fed():
         last = lines[-1].split(",")
         return f"معدل الفائدة الفيدرالي: {last[1]}% ({last[0]})"
     except Exception as e:
-        return f"خطأ: {e}"
+        return f"خطأ الفائدة: {e}"
 
 def get_fx():
     try:
@@ -95,7 +86,7 @@ def get_fx():
             f"AUD/USD: {round(1/rates.get('AUD',1),5)}"
         )
     except Exception as e:
-        return f"خطأ: {e}"
+        return f"خطأ العملات: {e}"
 
 # ─── إرسال Telegram ─────────────────────────────────────
 def send_telegram(message, chat_id=None):
@@ -114,16 +105,15 @@ def send_telegram(message, chat_id=None):
 
 # ─── التقرير الأسبوعي ───────────────────────────────────
 def weekly_analysis(chat_id=None):
-    send_telegram("⏳ جاري جلب البيانات وإعداد التقرير...", chat_id)
+    send_telegram("⏳ جاري جلب البيانات...", chat_id)
     news = get_news()
     fed  = get_fed()
     fx   = get_fx()
-    send_telegram(f"📡 البيانات جاهزة — جاري التحليل...", chat_id)
+    send_telegram("📡 البيانات جاهزة — جاري التحليل...", chat_id)
 
-    msg = f"""
-أعد تقريراً أسبوعياً احترافياً كاملاً الآن باللغة العربية.
+    msg = f"""أعد تقريراً أسبوعياً احترافياً باللغة العربية.
 
-الأخبار الاقتصادية الحالية:
+الأخبار:
 {news}
 
 الفائدة الأمريكية:
@@ -132,11 +122,11 @@ def weekly_analysis(chat_id=None):
 أسعار العملات:
 {fx}
 
-اكتب تقريراً شاملاً يتضمن: مراجعة الأسبوع المنتهي، أجندة الأسبوع القادم، السيناريوهات، والتوصية.
-"""
+اكتب تقريراً شاملاً: مراجعة الأسبوع، أجندة الأسبوع القادم، السيناريوهات، التوصية."""
+
     result = analyze(msg)
     send_telegram(
-        f"📊 *التقرير الأسبوعي — {datetime.now().strftime('%Y/%m/%d %H:%M')}*\n\n" + result,
+        f"📊 *التقرير الأسبوعي — {datetime.now().strftime('%Y/%m/%d %H:%M')}*\n\n{result}",
         chat_id
     )
 
@@ -153,8 +143,7 @@ def check_news(chat_id=None, force=False):
         print("لا يوجد شيء عاجل.")
         return
 
-    msg = f"""
-قدم تحليلاً احترافياً باللغة العربية للأخبار الاقتصادية التالية:
+    msg = f"""قدم تحليلاً احترافياً باللغة العربية للأخبار التالية:
 
 الأخبار:
 {news}
@@ -163,8 +152,8 @@ def check_news(chat_id=None, force=False):
 {get_fx()}
 
 الفائدة:
-{get_fed()}
-"""
+{get_fed()}"""
+
     result = analyze(msg)
     header = "⚡ *تنبيه عاجل*\n\n" if is_urgent else f"📰 *تقرير الأخبار — {datetime.now().strftime('%H:%M')}*\n\n"
     send_telegram(header + result, chat_id)
@@ -175,9 +164,10 @@ def listen_commands():
     print("👂 يستمع للأوامر...")
     while True:
         try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
             updates = requests.get(
-                url, params={"timeout": 30, "offset": offset}, timeout=35
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+                params={"timeout": 30, "offset": offset},
+                timeout=35
             ).json()
 
             for update in updates.get("result", []):
@@ -189,27 +179,19 @@ def listen_commands():
 
                 if text in ["/تقرير", "/report"]:
                     threading.Thread(target=weekly_analysis, args=(cid,)).start()
-
                 elif text in ["/اخبار", "/news"]:
                     threading.Thread(target=check_news, args=(cid, True)).start()
-
                 elif text in ["/حالة", "/status"]:
                     send_telegram(
-                        f"✅ *النظام يعمل*\n"
-                        f"🕐 {datetime.now().strftime('%Y/%m/%d %H:%M')}\n"
-                        f"📅 التقرير الأسبوعي: كل أحد 6 مساءً\n"
-                        f"⚡ فحص الأخبار: كل ساعة", cid
+                        f"✅ *النظام يعمل*\n🕐 {datetime.now().strftime('%Y/%m/%d %H:%M')}\n"
+                        f"📅 التقرير: كل أحد 6 مساءً\n⚡ فحص الأخبار: كل ساعة", cid
                     )
-
                 elif text in ["/مساعدة", "/help"]:
                     send_telegram(
-                        "📋 *الأوامر:*\n\n"
-                        "/تقرير — تقرير أسبوعي كامل\n"
-                        "/اخبار — تحليل الأخبار\n"
-                        "/حالة  — حالة النظام\n"
+                        "📋 *الأوامر:*\n\n/تقرير — تقرير أسبوعي\n"
+                        "/اخبار — تحليل الأخبار\n/حالة — حالة النظام\n"
                         "/مساعدة — هذه القائمة", cid
                     )
-
         except Exception as e:
             print(f"❌ خطأ استماع: {e}")
             time.sleep(5)
@@ -221,17 +203,12 @@ schedule.every(1).hours.do(check_news)
 # ─── بدء التشغيل ────────────────────────────────────────
 print("🚀 النظام يعمل...")
 send_telegram(
-    "✅ *نظام التحليل الأساسي يعمل*\n"
-    "د. كمال منصور جاهز 🎓\n\n"
-    "📋 *الأوامر:*\n"
-    "/تقرير — تقرير أسبوعي\n"
-    "/اخبار — تحليل الأخبار\n"
-    "/حالة  — حالة النظام\n"
-    "/مساعدة — المساعدة"
+    "✅ *نظام التحليل الأساسي يعمل*\nد. كمال منصور جاهز 🎓\n\n"
+    "📋 *الأوامر:*\n/تقرير\n/اخبار\n/حالة\n/مساعدة"
 )
-
 threading.Thread(target=listen_commands, daemon=True).start()
 
 while True:
     schedule.run_pending()
     time.sleep(60)
+                
